@@ -3,7 +3,7 @@
 // Investment Bank Deal Flow Automation
 // =============================================================================
 // ARCHITECTURE
-//   Raw_Logs  (manual input)  →  Claude API  →  Clean_Data  →  Looker Studio
+//   Raw_Logs  (manual input)  →  OpenAI API  →  Clean_Data  →  Looker Studio
 //
 // SECURITY MODEL
 //   - API key stored exclusively in PropertiesService (never in source code)
@@ -64,9 +64,8 @@ const STATUS = {
   ERROR:     'Erreur',
 };
 
-const CLAUDE_API_URL   = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL     = 'claude-opus-4-5';
-const CLAUDE_API_VER   = '2023-06-01';
+const OPENAI_API_URL   = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_MODEL     = 'gpt-4o';
 const MAX_OUTPUT_TOKENS = 512;
 const ROW_DELAY_MS     = 600;   // Politeness delay between API calls (ms)
 
@@ -118,7 +117,7 @@ function processContactLogs() {
     const timestamp = row[RAW_COL.TIMESTAMP];
 
     try {
-      const structured = _callClaudeAPI(banker, investor, notes);
+      const structured = _callOpenAIAPI(banker, investor, notes);
 
       _appendToCleanData(cleanSheet, {
         timestamp,
@@ -149,14 +148,15 @@ function processContactLogs() {
 
 
 // ---------------------------------------------------------------------------
-// CLAUDE API LAYER
+// OPENAI API LAYER
 // ---------------------------------------------------------------------------
 
 /**
- * _callClaudeAPI(banker, investor, notes)
+ * _callOpenAIAPI(banker, investor, notes)
  *
- * Sends a single row's data to Claude and returns a validated JS object.
+ * Sends a single row's data to OpenAI and returns a validated JS object.
  * Only the minimum required context is transmitted — never the full sheet.
+ * Uses response_format: json_object to guarantee parseable output.
  *
  * @param  {string} banker   - Banker name
  * @param  {string} investor - Investor/fund name
@@ -164,7 +164,7 @@ function processContactLogs() {
  * @returns {Object}          Validated structured object
  * @throws {Error}            On HTTP error, malformed JSON, or invalid values
  */
-function _callClaudeAPI(banker, investor, notes) {
+function _callOpenAIAPI(banker, investor, notes) {
   const apiKey = _getApiKey();
 
   const systemPrompt = `\
@@ -202,38 +202,40 @@ EXAMPLE OUTPUT:
   const userContent = `Banker: ${banker}\nInvestor / Fund: ${investor}\nCall Notes:\n${notes}`;
 
   const payload = {
-    model:      CLAUDE_MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    system:     systemPrompt,
-    messages:   [{ role: 'user', content: userContent }],
+    model:           OPENAI_MODEL,
+    max_tokens:      MAX_OUTPUT_TOKENS,
+    response_format: { type: 'json_object' },  // Enforces JSON-only output
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userContent  },
+    ],
   };
 
   const options = {
     method:          'post',
     contentType:     'application/json',
     headers: {
-      'x-api-key':          apiKey,
-      'anthropic-version':  CLAUDE_API_VER,
+      'Authorization': `Bearer ${apiKey}`,
     },
-    payload:           JSON.stringify(payload),
+    payload:            JSON.stringify(payload),
     muteHttpExceptions: true,
   };
 
-  const response     = UrlFetchApp.fetch(CLAUDE_API_URL, options);
+  const response     = UrlFetchApp.fetch(OPENAI_API_URL, options);
   const httpCode     = response.getResponseCode();
   const responseText = response.getContentText();
 
   if (httpCode !== 200) {
-    throw new Error(`HTTP ${httpCode} from Claude API: ${responseText.substring(0, 300)}`);
+    throw new Error(`HTTP ${httpCode} from OpenAI API: ${responseText.substring(0, 300)}`);
   }
 
   const apiBody = JSON.parse(responseText);
 
-  if (!apiBody.content || !apiBody.content[0] || !apiBody.content[0].text) {
+  if (!apiBody.choices || !apiBody.choices[0] || !apiBody.choices[0].message || !apiBody.choices[0].message.content) {
     throw new Error(`Unexpected API response structure: ${responseText.substring(0, 300)}`);
   }
 
-  return _validateAndParse(apiBody.content[0].text.trim());
+  return _validateAndParse(apiBody.choices[0].message.content.trim());
 }
 
 
@@ -340,16 +342,16 @@ function _getSheet(ss, name) {
 /**
  * _getApiKey()
  *
- * Retrieves the Anthropic API key from Script Properties.
+ * Retrieves the OpenAI API key from Script Properties.
  * Throws if not set to avoid silent failures.
  *
  * @returns {string}
  */
 function _getApiKey() {
-  const key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  const key = PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY');
   if (!key) {
     throw new Error(
-      'ANTHROPIC_API_KEY not set. Open Extensions → Apps Script → Project Settings → Script Properties and add it.'
+      'OPENAI_API_KEY not set. Open Extensions → Apps Script → Project Settings → Script Properties and add it.'
     );
   }
   return key;
@@ -358,17 +360,17 @@ function _getApiKey() {
 /**
  * setApiKey()
  *
- * ONE-TIME SETUP: stores your Anthropic API key securely.
+ * ONE-TIME SETUP: stores your OpenAI API key securely.
  *
  * HOW TO USE:
- *   1. Replace 'YOUR_KEY_HERE' with your real key.
+ *   1. Replace 'YOUR_KEY_HERE' with your real key (starts with "sk-...").
  *   2. Run this function ONCE from the Apps Script editor.
  *   3. Immediately remove or blank out the key string from this source code.
  *   4. The key is now stored in Script Properties — never in the code.
  */
 function setApiKey() {
   const key = 'YOUR_KEY_HERE'; // ← replace, run once, then clear this line
-  PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', key);
+  PropertiesService.getScriptProperties().setProperty('OPENAI_API_KEY', key);
   Logger.log('[SETUP] API key stored in Script Properties.');
 }
 

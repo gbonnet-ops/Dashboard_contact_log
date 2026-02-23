@@ -1,7 +1,7 @@
 # Dashboard Contact Log — Automated Deal Flow Pipeline
 
 Système automatisé de traitement des Contact Logs pour banquiers d'investissement.
-Chaque note d'appel brute est analysée par Claude (Anthropic) et transformée en données structurées, prêtes pour Looker Studio.
+Chaque note d'appel brute est analysée par OpenAI GPT-4o et transformée en données structurées, prêtes pour Looker Studio.
 
 ```
 Raw_Logs (Google Sheet)
@@ -10,7 +10,7 @@ Raw_Logs (Google Sheet)
 Google Apps Script
        │  appel API (ligne unique — privacy-first)
        ▼
-Claude API (claude-opus-4-5)
+OpenAI API (gpt-4o)
        │  JSON structuré retourné
        ▼
 Clean_Data (Google Sheet)
@@ -65,14 +65,14 @@ Looker Studio Dashboard
 > **Règle absolue :** la clé ne doit jamais apparaître dans le code source versionné.
 
 1. Dans le fichier `ContactLogProcessor.gs`, localisez la fonction `setApiKey()`.
-2. Remplacez `'YOUR_KEY_HERE'` par votre clé Anthropic réelle.
+2. Remplacez `'YOUR_KEY_HERE'` par votre clé OpenAI réelle (commence par `sk-...`).
 3. **Exécutez `setApiKey` une seule fois** depuis l'éditeur Apps Script (bouton ▶).
 4. **Effacez immédiatement** la valeur de la clé dans le code (remettez `'YOUR_KEY_HERE'`).
 5. Sauvegardez à nouveau.
 
 La clé est désormais stockée dans **Script Properties** (chiffrement AES-256 côté Google) — elle n'est plus jamais visible dans le code.
 
-Pour vérifier : **Paramètres du projet → Propriétés du script** → vous devriez voir `ANTHROPIC_API_KEY`.
+Pour vérifier : **Paramètres du projet → Propriétés du script** → vous devriez voir `OPENAI_API_KEY`.
 
 ### Étape 4 — Initialiser les onglets
 
@@ -95,7 +95,7 @@ Pour exécuter manuellement à tout moment : lancez `processContactLogs()`.
 | Clé API chiffrée | `PropertiesService.getScriptProperties()` — jamais dans le code |
 | Exposition minimale | Seule la ligne en cours est envoyée à l'API (pas le sheet entier) |
 | Données sensibles | Le contexte envoyé se limite à : nom du banquier, nom de l'investisseur, notes du call |
-| Pas de rétention | L'API Anthropic (sans cache activé) ne conserve pas les données entre appels |
+| Pas de rétention | L'API OpenAI (sans cache activé) ne conserve pas les données d'inférence entre appels |
 | Marquage des erreurs | Les lignes en erreur sont taguées `Erreur` — elles ne sont jamais renvoyées en boucle |
 
 ---
@@ -229,7 +229,7 @@ Visualise la répartition des raisons d'abandon.
 |--------|-------------|
 | Script | Google Apps Script (V8 runtime) |
 | Source de données | Google Sheets |
-| LLM | Anthropic Claude (`claude-opus-4-5`) |
+| LLM | OpenAI (`gpt-4o`) |
 | Dashboard | Looker Studio |
 | Sécurité clé | Google PropertiesService |
 | Déclencheur | Apps Script Time-based Trigger (toutes les heures) |

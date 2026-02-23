@@ -13,7 +13,7 @@ This project automates the processing of investment bankers' deal-flow call note
 Bankers enter free-text notes into a Google Sheet (`Raw_Logs`). A Google Apps Script triggers hourly, sends each unprocessed row to the **Anthropic Claude API**, and writes structured deal-pipeline data into a second sheet (`Clean_Data`). That clean sheet feeds a **Looker Studio** dashboard.
 
 - **Primary users:** Investment bankers and deal-flow analysts
-- **External services:** Anthropic Claude API (`claude-opus-4-5`), Google Sheets, Looker Studio
+- **External services:** OpenAI API (`gpt-4o`), Google Sheets, Looker Studio
 
 ---
 
@@ -22,7 +22,7 @@ Bankers enter free-text notes into a Google Sheet (`Raw_Logs`). A Google Apps Sc
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Automation engine | Google Apps Script (V8 runtime) | No server required — native to Google Workspace |
-| LLM / AI | Anthropic Claude API (`claude-opus-4-5`) | Structured JSON extraction from free-text notes |
+| LLM / AI | OpenAI API (`gpt-4o`) | Structured JSON extraction from free-text notes |
 | Source of truth | Google Sheets — `Raw_Logs` tab | Manual banker input |
 | Structured output | Google Sheets — `Clean_Data` tab | AI-generated, feeds Looker Studio |
 | Dashboard | Looker Studio | Connected to `Clean_Data` |
@@ -178,9 +178,9 @@ There are no `.env` files — this project uses Google Apps Script `PropertiesSe
 
 | Property key | Description | How to set |
 |-------------|-------------|-----------|
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude | Run `setApiKey()` once in Apps Script editor |
+| `OPENAI_API_KEY` | OpenAI API key (starts with `sk-...`) | Run `setApiKey()` once in Apps Script editor |
 
-**Never** commit an actual key to this repository. The `setApiKey()` function in the script is a one-time bootstrap helper — clear the key string from the code immediately after running it.
+**Never** commit an actual key to this repository. The `setApiKey()` function in the script is a one-time bootstrap helper — clear the key string from the code immediately after running it. OpenAI keys start with `sk-` and can be generated at platform.openai.com.
 
 ---
 
