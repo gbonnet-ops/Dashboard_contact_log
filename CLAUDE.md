@@ -7,121 +7,92 @@ This file provides context, conventions, and workflows for AI assistants (Claude
 ## Project Overview
 
 **Repository:** `Dashboard_contact_log`
-**Status:** New / bootstrapping phase — no application code yet committed.
+**Status:** Active — core automation script delivered.
 
-This project is a **contact-log dashboard** application. As development progresses, update this section with:
-- A one-sentence description of what the app does
-- The primary audience / users
-- Any external services or integrations it depends on
+This project automates the processing of investment bankers' deal-flow call notes.
+Bankers enter free-text notes into a Google Sheet (`Raw_Logs`). A Google Apps Script triggers hourly, sends each unprocessed row to the **Anthropic Claude API**, and writes structured deal-pipeline data into a second sheet (`Clean_Data`). That clean sheet feeds a **Looker Studio** dashboard.
 
----
-
-## Repository State
-
-> **Note:** This repository was initialized empty. The sections below are scaffolded templates that should be filled in as the project grows. When adding the first meaningful code, update this file in the same commit.
+- **Primary users:** Investment bankers and deal-flow analysts
+- **External services:** Anthropic Claude API (`claude-opus-4-5`), Google Sheets, Looker Studio
 
 ---
 
 ## Technology Stack
 
-*To be filled in once the stack is chosen. Common starting points for a dashboard + contact log:*
-
-| Layer | Likely choice | Notes |
-|-------|---------------|-------|
-| Frontend | React / Vue / plain HTML | Update when decided |
-| Backend | Node.js / Python / Go | Update when decided |
-| Database | PostgreSQL / SQLite / MongoDB | Update when decided |
-| Styling | Tailwind CSS / Bootstrap | Update when decided |
-| Testing | Jest / Pytest / Vitest | Update when decided |
-| CI/CD | GitHub Actions / GitLab CI | Update when decided |
-
-When the stack is finalized, replace this table with concrete details and version requirements.
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Automation engine | Google Apps Script (V8 runtime) | No server required — native to Google Workspace |
+| LLM / AI | Anthropic Claude API (`claude-opus-4-5`) | Structured JSON extraction from free-text notes |
+| Source of truth | Google Sheets — `Raw_Logs` tab | Manual banker input |
+| Structured output | Google Sheets — `Clean_Data` tab | AI-generated, feeds Looker Studio |
+| Dashboard | Looker Studio | Connected to `Clean_Data` |
+| Secret management | Google `PropertiesService` | API key never in source code |
 
 ---
 
 ## Directory Structure
 
-*Update this section as the project layout is established.*
-
 ```
 Dashboard_contact_log/
-├── CLAUDE.md          # This file — AI assistant guide
-├── README.md          # Human-facing project documentation
-├── .gitignore         # Files excluded from version control
-├── .env.example       # Template for required environment variables
+├── CLAUDE.md                        # This file — AI assistant guide
+├── README.md                        # Full setup, deployment & Looker Studio guide
 │
-├── src/               # Application source code (to be created)
-│   ├── ...
-│
-├── tests/             # Test files (to be created)
-│   ├── ...
-│
-└── docs/              # Additional documentation (optional)
-    └── ...
+└── src/
+    └── ContactLogProcessor.gs       # Complete Google Apps Script
+                                     # Copy-paste into Apps Script editor to deploy
 ```
+
+### Key file: `src/ContactLogProcessor.gs`
+
+All logic lives in one `.gs` file for easy deployment into the Apps Script editor.
+Internal organization:
+
+| Section | Functions |
+|---------|-----------|
+| **Main entry point** | `processContactLogs()` |
+| **Claude API layer** | `_callClaudeAPI()` |
+| **Response validation** | `_validateAndParse()` |
+| **Sheet operations** | `_appendToCleanData()`, `_getSheet()` |
+| **Secure config** | `_getApiKey()`, `setApiKey()` |
+| **One-time setup** | `initializeSheets()`, `createTimeTrigger()`, `retryErrorRows()` |
 
 ---
 
 ## Development Workflows
 
-### First-Time Setup
+> This project runs entirely inside Google Apps Script — there is no local dev server,
+> no `npm install`, and no build step. Development = editing `.gs` files in the browser
+> editor and testing against a real Google Sheet.
 
-Once project files exist, document the setup steps here. For example:
+### First-Time Deployment (one-time)
 
-```bash
-# Clone the repository
-git clone <repo-url>
-cd Dashboard_contact_log
-
-# Install dependencies (adjust for your stack)
-npm install          # Node.js
-# or
-pip install -r requirements.txt   # Python
-
-# Copy environment template and fill in values
-cp .env.example .env
-
-# Run the development server
-npm run dev
-# or
-python manage.py runserver
+```
+1. Open target Google Sheet
+2. Extensions → Apps Script
+3. Paste contents of src/ContactLogProcessor.gs into Code.gs
+4. Run setApiKey()        → stores API key in PropertiesService (then clear the key from code)
+5. Run initializeSheets() → creates Raw_Logs + Clean_Data tabs with headers
+6. Run createTimeTrigger() → activates hourly auto-processing
 ```
 
-### Running Tests
+Full walkthrough: see `README.md`.
 
-```bash
-# Run the full test suite
-npm test             # Node.js
-# or
-pytest               # Python
+### Manual Processing
 
-# Run tests in watch mode
-npm run test:watch
-```
+Run `processContactLogs()` from the Apps Script editor at any time.
+Processes all rows where Raw_Logs column E is empty.
 
-### Building for Production
+### Re-processing Error Rows
 
-```bash
-npm run build
-# or
-python -m build
-```
+Run `retryErrorRows()` to reset all `Erreur`-tagged rows back to empty,
+allowing them to be picked up on the next run.
 
-### Linting and Formatting
+### Editing the Script
 
-```bash
-# Lint
-npm run lint         # Node.js (ESLint / Biome)
-# or
-flake8 .             # Python
-
-# Format
-npm run format       # Prettier
-# or
-black .              # Python
-```
-
-Always run linting and tests before committing.
+1. Edit `src/ContactLogProcessor.gs` in this repository (for version control).
+2. Copy the updated content into the Apps Script editor.
+3. Test manually by running `processContactLogs()`.
+4. Commit changes to this repo with a descriptive message.
 
 ---
 
@@ -165,53 +136,62 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `style`, `perf`, `ci`
 
 ## Code Conventions
 
-*Finalize these once the language/framework is chosen. Placeholders below.*
+### Google Apps Script (V8)
 
-### General
-
-- Prefer readability over cleverness
-- Keep functions small and single-purpose
-- Delete dead code rather than commenting it out
-- No secrets or credentials in source code — use environment variables via `.env` (excluded from git)
-
-### JavaScript / TypeScript (if applicable)
-
-- ES modules (`import`/`export`), no CommonJS `require` in new files
+- **Language:** JavaScript ES2019 (V8 runtime) — no TypeScript, no bundler
+- **Naming:** `camelCase` for variables and public functions; `_camelCase` (underscore prefix) for private/internal helpers
+- **Constants:** `UPPER_SNAKE_CASE` at the top of the file
 - Prefer `const`; use `let` only when reassignment is necessary
-- Async/await over raw Promises
-- Strict TypeScript mode (`"strict": true` in `tsconfig.json`)
-- File names: `kebab-case.ts` for modules, `PascalCase.tsx` for React components
+- No `var` — always `const` or `let`
+- Always use `===` (strict equality)
+- Guard clauses over deeply nested `if` blocks
+- Each function does one thing — keep them short and focused
 
-### Python (if applicable)
+### API & Data Safety
 
-- Python 3.10+ features are acceptable
-- Type hints on all public function signatures
-- Follow PEP 8; enforced by `black` + `flake8`
-- Use `pathlib.Path` instead of `os.path`
+- **Never** hardcode the API key — always use `PropertiesService`
+- **Never** send the full sheet to the API — one row per call
+- Validate all LLM output before writing to the sheet (see `_validateAndParse()`)
+- Strip accidental markdown fences from LLM responses before `JSON.parse()`
+
+### Nomenclature (domain)
+
+Stick to the exact French/English labels used in the sheet headers and the Claude prompt — do not invent new status names or change capitalization.
+
+| Canonical value | Context |
+|----------------|---------|
+| `Approché` | First stage of the deal pipeline |
+| `Teaser Envoyé` | Teaser document sent |
+| `NDA Signé` | Non-disclosure agreement signed |
+| `Management Pres` | Management presentation stage |
+| `En Due Diligence` | Active due diligence |
+| `Offre Soumise` | Offer submitted |
+| `Pass/Dropped` | Deal abandoned |
+| `Traité` | Row successfully processed (Raw_Logs col E) |
+| `Erreur` | Processing failed (Raw_Logs col E) |
 
 ---
 
 ## Environment Variables
 
-*Document all required variables here. Never commit real values.*
+There are no `.env` files — this project uses Google Apps Script `PropertiesService`.
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `DATABASE_URL` | Database connection string | `postgresql://user:pass@localhost/db` |
-| `SECRET_KEY` | App secret / JWT signing key | (generate a random 64-char string) |
-| `LOG_LEVEL` | Logging verbosity | `info` |
+| Property key | Description | How to set |
+|-------------|-------------|-----------|
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude | Run `setApiKey()` once in Apps Script editor |
 
-Add variables to `.env.example` with placeholder values whenever a new one is introduced.
+**Never** commit an actual key to this repository. The `setApiKey()` function in the script is a one-time bootstrap helper — clear the key string from the code immediately after running it.
 
 ---
 
 ## Testing Guidelines
 
-- Write tests alongside new features — not as an afterthought
-- Unit tests for pure logic; integration tests for DB/API interactions
-- Name test files `<module>.test.ts` (JS) or `test_<module>.py` (Python)
-- Tests must pass on the CI pipeline before merging
-- Aim for meaningful coverage of edge cases, not just happy paths
+Google Apps Script has no native unit-test framework. Testing is done manually:
+
+1. **Happy path:** Add a raw note row to `Raw_Logs` with column E empty, run `processContactLogs()`, verify the row appears in `Clean_Data` with correct values and column E shows `Traité`.
+2. **Error path:** Temporarily set an invalid API key, run, verify column E shows `Erreur` and no data is written to `Clean_Data`.
+3. **Validation:** Feed edge-case notes (ambiguous status, no date, drop reason) and verify `_validateAndParse()` handles them gracefully.
+4. **Re-run safety:** Run `processContactLogs()` twice — already-processed rows must not be duplicated.
 
 ---
 
@@ -259,27 +239,32 @@ git push -u origin claude/<session-id>
 
 ## Common Tasks (Quick Reference)
 
-*Populate this section as the project matures.*
+All tasks are run inside the **Apps Script editor** (Extensions → Apps Script):
 
-| Task | Command |
-|------|---------|
-| Start dev server | `TBD` |
-| Run tests | `TBD` |
-| Lint code | `TBD` |
-| Build for production | `TBD` |
-| Apply DB migrations | `TBD` |
-| Seed test data | `TBD` |
+| Task | Function to run |
+|------|----------------|
+| First-time sheet setup | `initializeSheets()` |
+| Store API key securely | `setApiKey()` (then clear the key from code) |
+| Activate hourly trigger | `createTimeTrigger()` |
+| Process new rows manually | `processContactLogs()` |
+| Reset error rows for retry | `retryErrorRows()` |
+| View execution logs | Executions tab in Apps Script editor |
 
 ---
 
 ## Glossary
 
-*Add domain-specific terms here as they appear in the codebase.*
-
 | Term | Definition |
 |------|------------|
-| Contact log | A record of communications or interactions associated with a contact |
-| Dashboard | The main UI view aggregating contact log data |
+| Contact Log | A banker's free-text note from an investor call, entered in `Raw_Logs` |
+| Raw_Logs | Google Sheet tab where bankers manually enter call notes |
+| Clean_Data | Google Sheet tab populated by the script with AI-structured deal data |
+| Deal Status | Current stage of a deal in the M&A pipeline (7 allowed values) |
+| Drop Reason | Category explaining why a deal was abandoned (5 allowed values) |
+| Traité | French for "Processed" — status written to Raw_Logs col E on success |
+| Erreur | French for "Error" — status written to Raw_Logs col E on API failure |
+| PropertiesService | Google Apps Script service for secure key/value storage (encrypted at rest) |
+| Time-based trigger | Apps Script scheduler that runs `processContactLogs()` every hour |
 
 ---
 
