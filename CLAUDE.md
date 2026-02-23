@@ -10,7 +10,7 @@ This file provides context, conventions, and workflows for AI assistants (Claude
 **Status:** Active — core automation script delivered.
 
 This project automates the processing of investment bankers' deal-flow call notes.
-Bankers enter free-text notes into a Google Sheet (`Raw_Logs`). A Google Apps Script triggers hourly, sends each unprocessed row to the **Anthropic Claude API**, and writes structured deal-pipeline data into a second sheet (`Clean_Data`). That clean sheet feeds a **Looker Studio** dashboard.
+Bankers enter free-text notes into a Google Sheet (`Raw_Logs`). A Google Apps Script triggers hourly, sends each unprocessed row to the **OpenAI API (`gpt-4o`)**, and writes structured deal-pipeline data into a second sheet (`Clean_Data`). That clean sheet feeds a **Looker Studio** dashboard.
 
 - **Primary users:** Investment bankers and deal-flow analysts
 - **External services:** OpenAI API (`gpt-4o`), Google Sheets, Looker Studio
@@ -50,7 +50,7 @@ Internal organization:
 | Section | Functions |
 |---------|-----------|
 | **Main entry point** | `processContactLogs()` |
-| **Claude API layer** | `_callClaudeAPI()` |
+| **OpenAI API layer** | `_callOpenAIAPI()` |
 | **Response validation** | `_validateAndParse()` |
 | **Sheet operations** | `_appendToCleanData()`, `_getSheet()` |
 | **Secure config** | `_getApiKey()`, `setApiKey()` |
@@ -268,4 +268,4 @@ All tasks are run inside the **Apps Script editor** (Extensions → Apps Script)
 
 ---
 
-*Last updated: 2026-02-23. Update this date whenever this file is meaningfully changed.*
+*Last updated: 2026-02-23. Corrected stale Anthropic/Claude API references after migration to OpenAI gpt-4o (commit f25f11f). Update this date whenever this file is meaningfully changed.*
