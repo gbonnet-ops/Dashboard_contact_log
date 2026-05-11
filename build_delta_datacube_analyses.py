@@ -53,24 +53,72 @@ REVENUE_COLS = ["CA_2025", "CA_2026"]
 
 
 def find_header_row(ws) -> int:
-    """Scan first 10 rows; return row index whose values match expected headers."""
-    for r in range(1, 11):
-        row_vals = [c.value for c in ws[r] if c.value is not None]
-        as_text = [str(v).strip() for v in row_vals]
+    """Scan first 10 rows; return row index whose values match expected headers.
+
+    Works on both read-only and normal worksheets.
+    """
+    for i, row in enumerate(ws.iter_rows(max_row=10, values_only=True), start=1):
+        as_text = [str(v).strip() for v in row if v is not None]
         hits = sum(1 for h in EXPECTED_HEADERS if h in as_text)
         if hits >= 8:
-            return r
+            return i
     raise RuntimeError("Could not detect header row in ResultatFinancement.")
 
 
 def build_column_map(ws, header_row: int) -> dict[str, str]:
-    """Map header label -> column letter (e.g. 'Id' -> 'B')."""
+    """Map header label -> column letter (e.g. 'Id' -> 'B').
+
+    Works on both read-only and normal worksheets.
+    """
     col_map: dict[str, str] = {}
-    for cell in ws[header_row]:
-        if cell.value is None:
-            continue
-        col_map[str(cell.value).strip()] = get_column_letter(cell.column)
+    for i, row in enumerate(ws.iter_rows(min_row=header_row,
+                                          max_row=header_row,
+                                          values_only=False), start=1):
+        for cell in row:
+            if cell.value is None:
+                continue
+            col_map[str(cell.value).strip()] = get_column_letter(cell.column)
     return col_map
+
+
+def collect_value_counts(input_path: Path, header_row: int,
+                          cm: dict[str, str],
+                          fields: list[str]) -> dict[str, list[tuple[str, int]]]:
+    """Stream the data sheet once and count occurrences per requested field.
+
+    Returns {field_label: [(value, count), ...]} sorted desc by count.
+    """
+    from openpyxl import load_workbook as _lw
+    from openpyxl.utils import column_index_from_string
+    print("Streaming data sheet to compute unique values ...")
+    wb = _lw(input_path, read_only=True, data_only=True)
+    ws = wb[DATA_SHEET]
+    col_idx = {f: column_index_from_string(cm[f]) - 1
+               for f in fields if f in cm}
+    counts: dict[str, dict[str, int]] = {f: {} for f in fields if f in cm}
+    n = 0
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i + 1 <= header_row:
+            continue
+        for f, c in col_idx.items():
+            if c >= len(row):
+                continue
+            v = row[c]
+            if v is None or v == "":
+                continue
+            key = str(v).strip()
+            if not key:
+                continue
+            counts[f][key] = counts[f].get(key, 0) + 1
+        n += 1
+        if n % 50000 == 0:
+            print(f"  scanned {n} rows ...", flush=True)
+    wb.close()
+    print(f"  total scanned: {n} rows.")
+    return {
+        f: sorted(d.items(), key=lambda x: -x[1])
+        for f, d in counts.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +260,8 @@ def add_kpi_dashboard(wb, cm: dict[str, str], months_present: list[str]) -> None
     ws.column_dimensions["B"].width = 22
 
 
-def add_subscription_breakdown(wb, cm: dict[str, str]) -> None:
+def add_subscription_breakdown(wb, cm: dict[str, str],
+                                uniques: dict[str, list[tuple[str, int]]]) -> None:
     ws = wb.create_sheet("02_MRR_Subscriptions")
     write_title(ws, "Souscriptions — décomposition", span=6)
 
@@ -223,7 +272,7 @@ def add_subscription_breakdown(wb, cm: dict[str, str]) -> None:
     ca25_col = cm["CA_2025"]
     ca26_col = cm["CA_2026"]
 
-    # --- TypeAbo block ---
+    # --- TypeAbo block (static values pre-computed) ---
     ws["A3"] = "Par TypeAbo"
     ws["A3"].font = LABEL_FONT
     for i, h in enumerate(["TypeAbo", "# clients", "MRR (€)", "ARR (€)",
@@ -232,28 +281,18 @@ def add_subscription_breakdown(wb, cm: dict[str, str]) -> None:
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    # We rely on the user filling in TypeAbo values manually OR we list them by formula via UNIQUE.
-    # UNIQUE is dynamic-array (Excel 365). Provide fallback hint.
-    ws["A5"] = f"=IFERROR(UNIQUE(FILTER({col_ref(type_abo_col)}," \
-              f"{col_ref(type_abo_col)}<>\"\")),\"\")"
-    ws["A5"].comment = None
-    # Formulas applied to a vertical range A5:A30 (handles up to 25 distinct values)
-    for r in range(5, 31):
+    type_abo_values = [v for v, _ in uniques.get("TypeAbo", [])]
+    last_typeabo = 4
+    for i, val in enumerate(type_abo_values):
+        r = 5 + i
+        last_typeabo = r
+        ws.cell(row=r, column=1, value=val)
         ws.cell(row=r, column=2,
-                value=f'=IF($A{r}="","",COUNTIF({col_ref(type_abo_col)},$A{r}))')
+                value=f'=COUNTIF({col_ref(type_abo_col)},$A{r})')
         ws.cell(row=r, column=3,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(type_abo_col)},$A{r},'
-                      f'{col_ref(mrr_col)}))')
-        ws.cell(row=r, column=4, value=f'=IF($A{r}="","",C{r}*12)')
-        ws.cell(row=r, column=5,
-                value=f'=IFERROR(C{r}/SUMIFS({col_ref(mrr_col)},'
-                      f'{col_ref(type_abo_col)},$A{r},'
-                      f'{col_ref(mrr_col)},">0")*'
-                      f'COUNTIFS({col_ref(type_abo_col)},$A{r},'
-                      f'{col_ref(mrr_col)},">0")/'
-                      f'COUNTIFS({col_ref(type_abo_col)},$A{r},'
-                      f'{col_ref(mrr_col)},">0"),0)')
-        # Simpler ARPU: SUMIF MRR / COUNTIF where MRR>0 within that TypeAbo
+                value=f'=SUMIF({col_ref(type_abo_col)},$A{r},'
+                      f'{col_ref(mrr_col)})')
+        ws.cell(row=r, column=4, value=f'=C{r}*12')
         ws.cell(row=r, column=5,
                 value=f'=IFERROR(SUMIFS({col_ref(mrr_col)},'
                       f'{col_ref(type_abo_col)},$A{r},'
@@ -262,12 +301,12 @@ def add_subscription_breakdown(wb, cm: dict[str, str]) -> None:
                       f'{col_ref(mrr_col)},">0"),0)')
         ws.cell(row=r, column=6,
                 value=f'=IFERROR(C{r}/SUM({col_ref(mrr_col)}),0)')
+    if type_abo_values:
+        apply_number_formats(ws, 5, last_typeabo,
+                             {2: "#,##0", 3: "#,##0 €",
+                              4: "#,##0 €", 5: "#,##0 €", 6: "0.0%"})
 
-    apply_number_formats(ws, 5, 30, {2: "#,##0", 3: "#,##0 €",
-                                       4: "#,##0 €", 5: "#,##0 €",
-                                       6: "0.0%"})
-
-    # --- TypeDuree block ---
+    # --- TypeDuree block (static values) ---
     ws["H3"] = "Par TypeDuree"
     ws["H3"].font = LABEL_FONT
     for i, h in enumerate(["TypeDuree", "# clients", "MRR (€)", "ARR (€)"], start=8):
@@ -275,43 +314,53 @@ def add_subscription_breakdown(wb, cm: dict[str, str]) -> None:
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    ws["H5"] = f'=IFERROR(UNIQUE(FILTER({col_ref(type_duree_col)},' \
-              f'{col_ref(type_duree_col)}<>"")),"")'
-    for r in range(5, 16):
+    type_duree_values = [v for v, _ in uniques.get("TypeDuree", [])]
+    last_duree = 4
+    for i, val in enumerate(type_duree_values):
+        r = 5 + i
+        last_duree = r
+        ws.cell(row=r, column=8, value=val)
         ws.cell(row=r, column=9,
-                value=f'=IF($H{r}="","",COUNTIF({col_ref(type_duree_col)},$H{r}))')
+                value=f'=COUNTIF({col_ref(type_duree_col)},$H{r})')
         ws.cell(row=r, column=10,
-                value=f'=IF($H{r}="","",SUMIF({col_ref(type_duree_col)},$H{r},'
-                      f'{col_ref(mrr_col)}))')
-        ws.cell(row=r, column=11, value=f'=IF($H{r}="","",J{r}*12)')
-    apply_number_formats(ws, 5, 15, {9: "#,##0", 10: "#,##0 €", 11: "#,##0 €"})
+                value=f'=SUMIF({col_ref(type_duree_col)},$H{r},'
+                      f'{col_ref(mrr_col)})')
+        ws.cell(row=r, column=11, value=f'=J{r}*12')
+    if type_duree_values:
+        apply_number_formats(ws, 5, last_duree,
+                             {9: "#,##0", 10: "#,##0 €", 11: "#,##0 €"})
 
-    # --- StatusOffre block ---
-    ws["A33"] = "Par StatusOffre"
-    ws["A33"].font = LABEL_FONT
+    # --- StatusOffre block (static values) ---
+    status_start = max(last_typeabo, last_duree) + 3
+    ws.cell(row=status_start - 1, column=1,
+            value="Par StatusOffre").font = LABEL_FONT
     for i, h in enumerate(["StatusOffre", "# clients", "MRR (€)",
                             "ARR (€)", "CA 2025 (€)", "CA 2026 (€)"], start=1):
-        c = ws.cell(row=34, column=i, value=h)
+        c = ws.cell(row=status_start, column=i, value=h)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    ws["A35"] = f'=IFERROR(UNIQUE(FILTER({col_ref(status_col)},' \
-                f'{col_ref(status_col)}<>"")),"")'
-    for r in range(35, 50):
+    status_values = [v for v, _ in uniques.get("StatusOffre", [])]
+    for i, val in enumerate(status_values):
+        r = status_start + 1 + i
+        ws.cell(row=r, column=1, value=val)
         ws.cell(row=r, column=2,
-                value=f'=IF($A{r}="","",COUNTIF({col_ref(status_col)},$A{r}))')
+                value=f'=COUNTIF({col_ref(status_col)},$A{r})')
         ws.cell(row=r, column=3,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(status_col)},$A{r},'
-                      f'{col_ref(mrr_col)}))')
-        ws.cell(row=r, column=4, value=f'=IF($A{r}="","",C{r}*12)')
+                value=f'=SUMIF({col_ref(status_col)},$A{r},'
+                      f'{col_ref(mrr_col)})')
+        ws.cell(row=r, column=4, value=f'=C{r}*12')
         ws.cell(row=r, column=5,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(status_col)},$A{r},'
-                      f'{col_ref(ca25_col)}))')
+                value=f'=SUMIF({col_ref(status_col)},$A{r},'
+                      f'{col_ref(ca25_col)})')
         ws.cell(row=r, column=6,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(status_col)},$A{r},'
-                      f'{col_ref(ca26_col)}))')
-    apply_number_formats(ws, 35, 49, {2: "#,##0", 3: "#,##0 €",
-                                        4: "#,##0 €", 5: "#,##0 €", 6: "#,##0 €"})
+                value=f'=SUMIF({col_ref(status_col)},$A{r},'
+                      f'{col_ref(ca26_col)})')
+    if status_values:
+        apply_number_formats(ws, status_start + 1,
+                             status_start + len(status_values),
+                             {2: "#,##0", 3: "#,##0 €",
+                              4: "#,##0 €", 5: "#,##0 €", 6: "#,##0 €"})
 
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["H"].width = 16
@@ -445,7 +494,8 @@ def add_engagement_monthly(wb, cm: dict[str, str], months_present: list[str]) ->
         ws.column_dimensions[col].width = 20
 
 
-def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
+def add_sector_segmentation(wb, cm: dict[str, str],
+                              uniques: dict[str, list[tuple[str, int]]]) -> None:
     ws = wb.create_sheet("05_Segment_Sector")
     write_title(ws, "Segmentation — secteur, forme juridique, effectif", span=6)
 
@@ -457,7 +507,7 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
     ca25_col = cm["CA_2025"]
     ca26_col = cm["CA_2026"]
 
-    # NAF top 20 by count
+    # NAF top 20 by count — static values
     ws["A3"] = "Top 20 codes NAF par # clients"
     ws["A3"].font = LABEL_FONT
     for i, h in enumerate(["Code NAF", "# clients", "MRR (€)",
@@ -466,31 +516,27 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    # We need a UNIQUE list ranked by count. Excel 365: SORTBY(UNIQUE, -COUNTIF, ...)
-    ws["A5"] = (
-        f'=IFERROR(INDEX(SORTBY(UNIQUE(FILTER({col_ref(sector_col)},'
-        f'{col_ref(sector_col)}<>"")),'
-        f'COUNTIF({col_ref(sector_col)},'
-        f'UNIQUE(FILTER({col_ref(sector_col)},'
-        f'{col_ref(sector_col)}<>""))),-1),'
-        f'SEQUENCE(20)),"")'
-    )
-    for r in range(5, 25):
+    naf_top = [v for v, _ in uniques.get("ActivitePrincipaleEntreprise", [])[:20]]
+    for i, val in enumerate(naf_top):
+        r = 5 + i
+        ws.cell(row=r, column=1, value=val)
         ws.cell(row=r, column=2,
-                value=f'=IF($A{r}="","",COUNTIF({col_ref(sector_col)},$A{r}))')
+                value=f'=COUNTIF({col_ref(sector_col)},$A{r})')
         ws.cell(row=r, column=3,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(sector_col)},$A{r},'
-                      f'{col_ref(mrr_col)}))')
+                value=f'=SUMIF({col_ref(sector_col)},$A{r},'
+                      f'{col_ref(mrr_col)})')
         ws.cell(row=r, column=4,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(sector_col)},$A{r},'
-                      f'{col_ref(ca25_col)}))')
+                value=f'=SUMIF({col_ref(sector_col)},$A{r},'
+                      f'{col_ref(ca25_col)})')
         ws.cell(row=r, column=5,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(sector_col)},$A{r},'
-                      f'{col_ref(ca26_col)}))')
-    apply_number_formats(ws, 5, 24,
-                         {2: "#,##0", 3: "#,##0 €", 4: "#,##0 €", 5: "#,##0 €"})
+                value=f'=SUMIF({col_ref(sector_col)},$A{r},'
+                      f'{col_ref(ca26_col)})')
+    if naf_top:
+        apply_number_formats(ws, 5, 4 + len(naf_top),
+                             {2: "#,##0", 3: "#,##0 €",
+                              4: "#,##0 €", 5: "#,##0 €"})
 
-    # Secteur Henrri top 20
+    # Secteur Henrri top 20 — static values
     ws["G3"] = "Top 20 Secteurs Henrri par # clients"
     ws["G3"].font = LABEL_FONT
     for i, h in enumerate(["Secteur", "# clients", "MRR (€)", "CA 2025 (€)"],
@@ -499,61 +545,61 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    ws["G5"] = (
-        f'=IFERROR(INDEX(SORTBY(UNIQUE(FILTER({col_ref(secteur_henrri_col)},'
-        f'{col_ref(secteur_henrri_col)}<>"")),'
-        f'COUNTIF({col_ref(secteur_henrri_col)},'
-        f'UNIQUE(FILTER({col_ref(secteur_henrri_col)},'
-        f'{col_ref(secteur_henrri_col)}<>""))),-1),SEQUENCE(20)),"")'
-    )
-    for r in range(5, 25):
+    henrri_top = [v for v, _ in uniques.get(
+        "Secteur d'activité récolté dans Henrri", [])[:20]]
+    for i, val in enumerate(henrri_top):
+        r = 5 + i
+        ws.cell(row=r, column=7, value=val)
         ws.cell(row=r, column=8,
-                value=f'=IF($G{r}="","",COUNTIF({col_ref(secteur_henrri_col)},$G{r}))')
+                value=f'=COUNTIF({col_ref(secteur_henrri_col)},$G{r})')
         ws.cell(row=r, column=9,
-                value=f'=IF($G{r}="","",SUMIF({col_ref(secteur_henrri_col)},$G{r},'
-                      f'{col_ref(mrr_col)}))')
+                value=f'=SUMIF({col_ref(secteur_henrri_col)},$G{r},'
+                      f'{col_ref(mrr_col)})')
         ws.cell(row=r, column=10,
-                value=f'=IF($G{r}="","",SUMIF({col_ref(secteur_henrri_col)},$G{r},'
-                      f'{col_ref(ca25_col)}))')
-    apply_number_formats(ws, 5, 24,
-                         {8: "#,##0", 9: "#,##0 €", 10: "#,##0 €"})
+                value=f'=SUMIF({col_ref(secteur_henrri_col)},$G{r},'
+                      f'{col_ref(ca25_col)})')
+    if henrri_top:
+        apply_number_formats(ws, 5, 4 + len(henrri_top),
+                             {8: "#,##0", 9: "#,##0 €", 10: "#,##0 €"})
 
-    # Forme juridique
-    ws["A28"] = "Par forme juridique"
-    ws["A28"].font = LABEL_FONT
+    # Forme juridique — all values, sorted by count
+    forme_start = max(4 + len(naf_top), 4 + len(henrri_top)) + 4
+    ws.cell(row=forme_start - 1, column=1,
+            value="Par forme juridique").font = LABEL_FONT
     for i, h in enumerate(["Forme juridique", "# clients", "MRR (€)",
                             "CA 2025 (€)", "% MRR"], start=1):
-        c = ws.cell(row=29, column=i, value=h)
+        c = ws.cell(row=forme_start, column=i, value=h)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
-    ws["A30"] = (
-        f'=IFERROR(SORTBY(UNIQUE(FILTER({col_ref(forme_col)},'
-        f'{col_ref(forme_col)}<>"")),'
-        f'COUNTIF({col_ref(forme_col)},'
-        f'UNIQUE(FILTER({col_ref(forme_col)},'
-        f'{col_ref(forme_col)}<>""))),-1),"")'
-    )
-    for r in range(30, 55):
+    forme_values = [v for v, _ in uniques.get("forme juridique", [])]
+    for i, val in enumerate(forme_values):
+        r = forme_start + 1 + i
+        ws.cell(row=r, column=1, value=val)
         ws.cell(row=r, column=2,
-                value=f'=IF($A{r}="","",COUNTIF({col_ref(forme_col)},$A{r}))')
+                value=f'=COUNTIF({col_ref(forme_col)},$A{r})')
         ws.cell(row=r, column=3,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(forme_col)},$A{r},'
-                      f'{col_ref(mrr_col)}))')
+                value=f'=SUMIF({col_ref(forme_col)},$A{r},'
+                      f'{col_ref(mrr_col)})')
         ws.cell(row=r, column=4,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(forme_col)},$A{r},'
-                      f'{col_ref(ca25_col)}))')
+                value=f'=SUMIF({col_ref(forme_col)},$A{r},'
+                      f'{col_ref(ca25_col)})')
         ws.cell(row=r, column=5,
                 value=f'=IFERROR(C{r}/SUM({col_ref(mrr_col)}),0)')
-    apply_number_formats(ws, 30, 54,
-                         {2: "#,##0", 3: "#,##0 €", 4: "#,##0 €", 5: "0.0%"})
+    if forme_values:
+        apply_number_formats(ws, forme_start + 1,
+                             forme_start + len(forme_values),
+                             {2: "#,##0", 3: "#,##0 €",
+                              4: "#,##0 €", 5: "0.0%"})
 
-    # Effectif tranches
-    ws["G28"] = "Par tranche d'effectif"
-    ws["G28"].font = LABEL_FONT
+    # Effectif tranches — place to the right of the forme juridique block
+    eff_header_row = forme_start
+    eff_data_start = forme_start + 1
+    ws.cell(row=eff_header_row - 1, column=7,
+            value="Par tranche d'effectif").font = LABEL_FONT
     for i, h in enumerate(["Tranche effectif", "# clients", "MRR (€)",
                             "CA 2025 (€)"], start=7):
-        c = ws.cell(row=29, column=i, value=h)
+        c = ws.cell(row=eff_header_row, column=i, value=h)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
@@ -561,12 +607,11 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
     eff_bands = [
         ("0 - vide", '""'),
         ("1", '"1"'),
-        ("2-5", None),         # use SUMPRODUCT range
+        ("2-5", None),
         ("6-10", None),
         ("11-50", None),
         ("51+", None),
     ]
-
     band_ranges = {
         "2-5": (2, 5),
         "6-10": (6, 10),
@@ -574,7 +619,7 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
         "51+": (51, 10**9),
     }
 
-    r = 30
+    r = eff_data_start
     for name, _ in eff_bands:
         ws.cell(row=r, column=7, value=name)
         if name in band_ranges:
@@ -592,7 +637,7 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
                           f'{col_ref(eff_col)},"<={hi}")')
         elif name == "0 - vide":
             ws.cell(row=r, column=8,
-                    value=f'=COUNTBLANK({col_ref(eff_col)})-1')  # -1 for header gap
+                    value=f'=COUNTBLANK({col_ref(eff_col)})-1')
             ws.cell(row=r, column=9,
                     value=f'=SUMIFS({col_ref(mrr_col)},'
                           f'{col_ref(eff_col)},"")')
@@ -607,7 +652,7 @@ def add_sector_segmentation(wb, cm: dict[str, str]) -> None:
             ws.cell(row=r, column=10,
                     value=f'=SUMIF({col_ref(eff_col)},1,{col_ref(ca25_col)})')
         r += 1
-    apply_number_formats(ws, 30, r - 1,
+    apply_number_formats(ws, eff_data_start, r - 1,
                          {8: "#,##0", 9: "#,##0 €", 10: "#,##0 €"})
 
     ws.column_dimensions["A"].width = 38
@@ -665,7 +710,8 @@ def add_geo_segmentation(wb, cm: dict[str, str]) -> None:
         ws.column_dimensions[col].width = 18
 
 
-def add_acquisition(wb, cm: dict[str, str]) -> None:
+def add_acquisition(wb, cm: dict[str, str],
+                    uniques: dict[str, list[tuple[str, int]]]) -> None:
     ws = wb.create_sheet("07_Acquisition")
     write_title(ws, "Acquisition — par SourceCreation et cohorte", span=6)
 
@@ -675,7 +721,7 @@ def add_acquisition(wb, cm: dict[str, str]) -> None:
     mrr_col = cm["MRR en cours HT"]
     ca25_col = cm["CA_2025"]
 
-    ws["A3"] = "Par SourceCreation"
+    ws["A3"] = "Par SourceCreation (top 50)"
     ws["A3"].font = LABEL_FONT
     for i, h in enumerate(["SourceCreation", "# clients",
                             "# clients payants (MRR>0)",
@@ -686,44 +732,40 @@ def add_acquisition(wb, cm: dict[str, str]) -> None:
         c.fill = HEADER_FILL
         c.alignment = CENTER
 
-    ws["A5"] = (
-        f'=IFERROR(SORTBY(UNIQUE(FILTER({col_ref(source_col)},'
-        f'{col_ref(source_col)}<>"")),'
-        f'COUNTIF({col_ref(source_col)},'
-        f'UNIQUE(FILTER({col_ref(source_col)},'
-        f'{col_ref(source_col)}<>""))),-1),"")'
-    )
-    for r in range(5, 55):
+    source_top = [v for v, _ in uniques.get("SourceCreation", [])[:50]]
+    for i, val in enumerate(source_top):
+        r = 5 + i
+        ws.cell(row=r, column=1, value=val)
         ws.cell(row=r, column=2,
-                value=f'=IF($A{r}="","",COUNTIF({col_ref(source_col)},$A{r}))')
+                value=f'=COUNTIF({col_ref(source_col)},$A{r})')
         ws.cell(row=r, column=3,
-                value=f'=IF($A{r}="","",COUNTIFS({col_ref(source_col)},$A{r},'
-                      f'{col_ref(mrr_col)},">0"))')
-        ws.cell(row=r, column=4,
-                value=f"=IFERROR(C{r}/B{r},0)")
+                value=f'=COUNTIFS({col_ref(source_col)},$A{r},'
+                      f'{col_ref(mrr_col)},">0")')
+        ws.cell(row=r, column=4, value=f"=IFERROR(C{r}/B{r},0)")
         ws.cell(row=r, column=5,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(source_col)},$A{r},'
-                      f'{col_ref(mrr_col)}))')
+                value=f'=SUMIF({col_ref(source_col)},$A{r},{col_ref(mrr_col)})')
         ws.cell(row=r, column=6,
-                value=f'=IF($A{r}="","",SUMIF({col_ref(source_col)},$A{r},'
-                      f'{col_ref(ca25_col)}))')
-    apply_number_formats(ws, 5, 54,
-                         {2: "#,##0", 3: "#,##0", 4: "0.0%",
-                          5: "#,##0 €", 6: "#,##0 €"})
+                value=f'=SUMIF({col_ref(source_col)},$A{r},{col_ref(ca25_col)})')
+    if source_top:
+        apply_number_formats(ws, 5, 4 + len(source_top),
+                             {2: "#,##0", 3: "#,##0", 4: "0.0%",
+                              5: "#,##0 €", 6: "#,##0 €"})
 
     # Conversion rate to paying by cohort year
-    ws["A58"] = "Conversion création → premier achat — par année de cohorte"
-    ws["A58"].font = LABEL_FONT
+    cohort_start = 4 + len(source_top) + 4
+    ws.cell(row=cohort_start - 1, column=1,
+            value="Conversion création → premier achat — par année de cohorte"
+            ).font = LABEL_FONT
     for i, h in enumerate(["Année cohorte", "# créés", "# avec DatePremierAchat",
                             "Taux conversion"], start=1):
-        c = ws.cell(row=59, column=i, value=h)
+        c = ws.cell(row=cohort_start, column=i, value=h)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = CENTER
 
     years = list(range(2015, 2027))
     for i, y in enumerate(years):
-        r = 60 + i
+        r = cohort_start + 1 + i
         ws.cell(row=r, column=1, value=y)
         year_match = f'(LEFT({col_ref(date_creation_col)},4)="{y}")'
         ws.cell(row=r, column=2,
@@ -731,13 +773,13 @@ def add_acquisition(wb, cm: dict[str, str]) -> None:
         ws.cell(row=r, column=3,
                 value=f'=SUMPRODUCT({year_match}*({col_ref(date_paid_col)}<>""))')
         ws.cell(row=r, column=4, value=f"=IFERROR(C{r}/B{r},0)")
-    end_r = 60 + len(years) - 1
-    apply_number_formats(ws, 60, end_r,
+    end_r = cohort_start + len(years)
+    apply_number_formats(ws, cohort_start + 1, end_r,
                          {2: "#,##0", 3: "#,##0", 4: "0.0%"})
 
-    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["A"].width = 36
     for col in "BCDEF":
-        ws.column_dimensions[col].width = 20
+        ws.column_dimensions[col].width = 22
 
 
 def add_pareto(wb, cm: dict[str, str]) -> None:
@@ -919,38 +961,50 @@ def main() -> None:
     if not input_path.exists():
         sys.exit(f"Input file not found: {input_path}")
 
-    print(f"Loading {input_path} ...")
-    wb = load_workbook(input_path)
-
-    if DATA_SHEET not in wb.sheetnames:
-        sys.exit(f"Sheet '{DATA_SHEET}' not found. Sheets: {wb.sheetnames}")
-
-    ws_data = wb[DATA_SHEET]
-    header_row = find_header_row(ws_data)
+    # Pass 1 (streaming, read-only): detect headers, columns, and collect uniques
+    print(f"Inspecting {input_path} in read-only mode ...")
+    wb_ro = load_workbook(input_path, read_only=True, data_only=True)
+    if DATA_SHEET not in wb_ro.sheetnames:
+        sys.exit(f"Sheet '{DATA_SHEET}' not found. Sheets: {wb_ro.sheetnames}")
+    ws_data_ro = wb_ro[DATA_SHEET]
+    header_row = find_header_row(ws_data_ro)
     print(f"Detected header row at row {header_row}")
-
-    cm = build_column_map(ws_data, header_row)
+    cm = build_column_map(ws_data_ro, header_row)
     print(f"Detected {len(cm)} columns")
-
     missing = [h for h in EXPECTED_HEADERS if h not in cm]
     if missing:
         print(f"WARNING: missing expected columns: {missing}")
-
     months_present = [m for m in MONTH_COLS if m in cm]
     revenues_present = [m for m in REVENUE_COLS if m in cm]
     print(f"Monthly columns present: {len(months_present)} "
           f"({months_present[0] if months_present else 'none'} ... "
           f"{months_present[-1] if months_present else 'none'})")
     print(f"Revenue columns present: {revenues_present}")
+    wb_ro.close()
+
+    fields_to_count = [
+        "TypeAbo", "TypeDuree", "StatusOffre",
+        "ActivitePrincipaleEntreprise",
+        "Secteur d'activité récolté dans Henrri",
+        "forme juridique", "SourceCreation",
+    ]
+    uniques = collect_value_counts(input_path, header_row, cm, fields_to_count)
+    for f, lst in uniques.items():
+        print(f"  {f}: {len(lst)} distinct values "
+              f"(top: {lst[0] if lst else '-'})")
+
+    # Pass 2: load workbook in normal mode and add the analysis sheets
+    print(f"Loading {input_path} in normal mode (for editing) ...")
+    wb = load_workbook(input_path)
 
     print("Building analysis sheets ...")
     add_kpi_dashboard(wb, cm, months_present)
-    add_subscription_breakdown(wb, cm)
+    add_subscription_breakdown(wb, cm, uniques)
     add_cohort_analysis(wb, cm, months_present)
     add_engagement_monthly(wb, cm, months_present)
-    add_sector_segmentation(wb, cm)
+    add_sector_segmentation(wb, cm, uniques)
     add_geo_segmentation(wb, cm)
-    add_acquisition(wb, cm)
+    add_acquisition(wb, cm, uniques)
     add_pareto(wb, cm)
     add_churn(wb, cm, months_present)
 
