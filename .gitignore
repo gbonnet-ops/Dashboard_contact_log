@@ -1,4 +1,6 @@
-# Generated analysis workbooks (large binaries, do not commit)
-*.xlsx
+# Source workbook (binary, never commit)
 *.xlsb
 *.xlsm
+# Excel workbooks: ignore everything except the generated analyses deliverable
+*.xlsx
+!260511_Delta_Datacube_with_Analyses.xlsx
