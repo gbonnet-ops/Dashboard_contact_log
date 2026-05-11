@@ -1,0 +1,4 @@
+# Generated analysis workbooks (large binaries, do not commit)
+*.xlsx
+*.xlsb
+*.xlsm
