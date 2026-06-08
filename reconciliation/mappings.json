@@ -1,0 +1,41 @@
+{
+  "entites": {
+    "H2R": "SARL H2R",
+    "ALLIANCE": "SAS GROUPE RIVALIS",
+    "BM EST": "SARL BM EST",
+    "KCOLD": "ORPHELIN",
+    "RIVAGROUPE": "RIVAGROUPE SAS",
+    "VALPOLIS": "SARL VALPOLIS"
+  },
+  "postes": {
+    "Sous-traitance & prestations externes": "Charges externes",
+    "Fournitures & petit équipement": "Achats consommés",
+    "Énergie, eau & carburants": "Achats consommés",
+    "Logiciels, IT & hébergement": "Charges externes",
+    "Achats de marchandises": "Achats consommés",
+    "Management fees / intra-groupe": "Opérations d'exploitation Intra-Groupe",
+    "Formation": "Charges externes",
+    "Recrutement": "Charges externes",
+    "Prestations conseillers TPE": "Charges externes",
+    "Locations & crédit-bail": "Charges externes",
+    "Entretien & maintenance": "Charges externes",
+    "Assurances": "Charges externes",
+    "Documentation & cotisations": "Charges externes",
+    "Honoraires": "Charges externes",
+    "Marketing & communication": "Charges externes",
+    "Commissions sur encaissement": "Charges externes",
+    "Déplacements, missions & réceptions": "Charges externes",
+    "Frais postaux & télécom": "Charges externes",
+    "Services bancaires": "Charges externes",
+    "Impôts & taxes d'exploitation": "Impôts et taxes",
+    "Charges de personnel": "Charges de personnel",
+    "#N/A": "Charges de personnel",
+    "Pertes sur créances irrécouvrables": "Autres charges d'exploitation",
+    "Autres charges de gestion courante": "Autres charges d'exploitation",
+    "Charges financières": "Charges et produits financiers",
+    "[obsolète] Charges financières": "Charges et produits financiers",
+    "[obsolète] Charges exceptionnelles": "Charges et produits exceptionnels",
+    "Dotations amort. & provisions": "Variations nettes des amortissements et des dépréciations",
+    "Impôts sur les bénéfices & crédits d'impôt": "Impôt sur les bénéfices"
+  }
+}
